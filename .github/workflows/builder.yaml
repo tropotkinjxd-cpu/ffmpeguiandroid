@@ -1,276 +1,100 @@
-name: Build FFmpeg UI APK (armeabi-v7a)
+name: Build FFmpeg Android APK
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y git wget unzip build-essential pkg-config yasm cmake autoconf automake libtool
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 21
+        ndk: 25.2.9519653
+        cmake: 3.22.1
+        build-tools: 30.0.3
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y autoconf automake build-essential pkg-config git wget unzip yasm libtool
+    - name: Download FFmpeg source
+      run: |
+        wget https://ffmpeg.org/releases/ffmpeg-6.0.tar.bz2
+        tar xjf ffmpeg-6.0.tar.bz2
+        mv ffmpeg-6.0 ffmpeg
 
-      - name: Download NDK
-        run: |
-          wget https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-          unzip android-ndk-r25c-linux.zip
-          mv android-ndk-r25c $HOME/ndk
+    - name: Configure NDK toolchain
+      run: |
+        export API=21
+        export NDK=$ANDROID_NDK_HOME
+        export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+        export AR=$TOOLCHAIN/bin/llvm-ar
+        export AS=$TOOLCHAIN/bin/llvm-as
+        export CC=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang
+        export CXX=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang++
+        export LD=$TOOLCHAIN/bin/ld
+        export STRIP=$TOOLCHAIN/bin/llvm-strip
+        export NM=$TOOLCHAIN/bin/llvm-nm
+        export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
 
-      - name: Download FFmpeg
-        run: |
-          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
-          cd ffmpeg
-          git checkout n6.0
+        cd ffmpeg
+        ./configure \
+          --prefix=$PWD/build/armeabi-v7a \
+          --target-os=android \
+          --arch=armv7a \
+          --cpu=armv7-a \
+          --enable-shared \
+          --enable-gpl \
+          --enable-libdrm \
+          --enable-omx \
+          --enable-omx-rpi \
+          --enable-v4l2-m2m \
+          --disable-vulkan \
+          --disable-static \
+          --disable-doc \
+          --disable-programs \
+          --cross-prefix=$TOOLCHAIN/bin/arm-linux-androideabi- \
+          --cc=$CC \
+          --cxx=$CXX \
+          --ar=$AR \
+          --nm=$NM \
+          --strip=$STRIP \
+          --ranlib=$RANLIB \
+          --sysroot=$TOOLCHAIN/sysroot \
+          --extra-cflags="-O3 -fPIC" \
+          --extra-ldflags="-lm"
 
-      - name: Build FFmpeg (armeabi-v7a, V4L2M2M + OpenMAX, no Vulkan)
-        run: |
-          export NDK=$HOME/ndk
-          export API=21
-          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export AR=$TOOLCHAIN/bin/arm-linux-androideabi-ar
-          export AS=$TOOLCHAIN/bin/arm-linux-androideabi-as
-          export CC=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang
-          export CXX=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang++
-          export LD=$TOOLCHAIN/bin/arm-linux-androideabi-ld
-          export STRIP=$TOOLCHAIN/bin/arm-linux-androideabi-strip
+    - name: Build FFmpeg
+      run: |
+        cd ffmpeg
+        make -j2
+        make install
 
-          cd ffmpeg
-          ./configure \
-            --prefix=$PWD/build/armeabi-v7a \
-            --target-os=android \
-            --arch=arm \
-            --cpu=armv7-a \
-            --enable-cross-compile \
-            --cross-prefix=$TOOLCHAIN/bin/arm-linux-androideabi- \
-            --sysroot=$TOOLCHAIN/sysroot \
-            --disable-static \
-            --enable-shared \
-            --disable-doc \
-            --disable-programs \
-            --disable-vulkan \
-            --enable-hwaccels \
-            --enable-libdrm \
-            --enable-omx \
-            --enable-omx-rpi \
-            --enable-mmal \
-            --enable-v4l2-m2m
+    - name: Prepare Android project
+      run: |
+        mkdir -p app/src/main/jniLibs/armeabi-v7a
+        cp -v ffmpeg/build/armeabi-v7a/lib/*.so app/src/main/jniLibs/armeabi-v7a/
 
-          make -j$(nproc)
-          make install
+    - name: Build APK
+      run: |
+        chmod +x ./gradlew
+        ./gradlew assembleRelease
 
-      - name: Create Android project
-        run: |
-          mkdir -p FFmpegUI/app/src/main/java/com/example/ffmpegui
-          mkdir -p FFmpegUI/app/src/main/res/layout
-          mkdir -p FFmpegUI/app/src/main/jniLibs/armeabi-v7a
-          mkdir -p FFmpegUI/app/src/main/assets
-
-          # Manifest with permissions
-          cat > FFmpegUI/app/src/main/AndroidManifest.xml <<'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.example.ffmpegui">
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-              <application android:allowBackup="true" android:label="FFmpeg UI" android:supportsRtl="true">
-                  <activity android:name=".MainActivity">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-          # Layout XML
-          cat > FFmpegUI/app/src/main/res/layout/activity_main.xml <<'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:orientation="vertical"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:padding="16dp">
-
-              <Button
-                  android:id="@+id/selectInput"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Select Input File" />
-
-              <Button
-                  android:id="@+id/selectOutput"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Select Output File" />
-
-              <Spinner
-                  android:id="@+id/videoCodecSpinner"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content" />
-
-              <Spinner
-                  android:id="@+id/audioCodecSpinner"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content" />
-
-              <EditText
-                  android:id="@+id/videoWidth"
-                  android:hint="Video width (keep aspect)"
-                  android:inputType="number"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content" />
-
-              <EditText
-                  android:id="@+id/extraParams"
-                  android:hint="Extra FFmpeg params"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content" />
-
-              <Button
-                  android:id="@+id/saveConfig"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Save Config" />
-
-              <Button
-                  android:id="@+id/loadConfig"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Load Config" />
-
-              <Button
-                  android:id="@+id/startBtn"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Start Encoding" />
-
-          </LinearLayout>
-          EOF
-
-          # Java code
-          cat > FFmpegUI/app/src/main/java/com/example/ffmpegui/MainActivity.java <<'EOF'
-          package com.example.ffmpegui;
-
-          import android.app.Activity;
-          import android.content.Intent;
-          import android.net.Uri;
-          import android.os.Bundle;
-          import android.util.Log;
-          import android.widget.*;
-          import java.io.*;
-
-          public class MainActivity extends Activity {
-              static {
-                  System.loadLibrary("avutil");
-                  System.loadLibrary("avcodec");
-                  System.loadLibrary("avformat");
-                  System.loadLibrary("swscale");
-                  System.loadLibrary("swresample");
-                  System.loadLibrary("avfilter");
-                  System.loadLibrary("postproc");
-                  System.loadLibrary("ffmpeg");
-              }
-              public native int ffmpeg_main(int argc, String[] argv);
-
-              Uri inputUri, outputUri;
-
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  setContentView(R.layout.activity_main);
-
-                  Spinner videoSpinner = findViewById(R.id.videoCodecSpinner);
-                  Spinner audioSpinner = findViewById(R.id.audioCodecSpinner);
-                  EditText videoWidth = findViewById(R.id.videoWidth);
-                  EditText extraParams = findViewById(R.id.extraParams);
-                  Button startBtn = findViewById(R.id.startBtn);
-                  Button selectInput = findViewById(R.id.selectInput);
-                  Button selectOutput = findViewById(R.id.selectOutput);
-                  Button saveConfig = findViewById(R.id.saveConfig);
-                  Button loadConfig = findViewById(R.id.loadConfig);
-
-                  String[] videoCodecs = {"h264_v4l2m2m", "mpeg4_v4l2m2m", "h264_omx"};
-                  String[] audioCodecs = {"aac", "mp3", "libopus"};
-
-                  videoSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, videoCodecs));
-                  audioSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, audioCodecs));
-
-                  selectInput.setOnClickListener(v -> {
-                      Intent i = new Intent(Intent.ACTION_GET_CONTENT);
-                      i.setType("*/*");
-                      startActivityForResult(i, 1);
-                  });
-
-                  selectOutput.setOnClickListener(v -> {
-                      Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-                      i.setType("video/*");
-                      i.putExtra(Intent.EXTRA_TITLE, "output.mp4");
-                      startActivityForResult(i, 2);
-                  });
-
-                  startBtn.setOnClickListener(v -> {
-                      if (inputUri == null || outputUri == null) {
-                          Toast.makeText(this, "Select input and output first!", Toast.LENGTH_SHORT).show();
-                          return;
-                      }
-                      String vcodec = videoSpinner.getSelectedItem().toString();
-                      String acodec = audioSpinner.getSelectedItem().toString();
-                      String width = videoWidth.getText().toString().trim();
-                      String extra = extraParams.getText().toString().trim();
-
-                      String inputPath = FileUtils.getPath(this, inputUri);
-                      String outputPath = FileUtils.getPath(this, outputUri);
-
-                      String resize = width.isEmpty() ? "" : "-vf scale=" + width + ":-2";
-                      String audioStereo = "-ac 2";
-
-                      String[] cmd = ("ffmpeg -y -i " + inputPath
-                              + " -c:v " + vcodec + " " + resize
-                              + " -c:a " + acodec + " " + audioStereo
-                              + " " + extra + " " + outputPath).split(" ");
-
-                      new Thread(() -> {
-                          int res = ffmpeg_main(cmd.length, cmd);
-                          Log.d("FFmpegUI", "FFmpeg exit: " + res);
-                          runOnUiThread(() -> Toast.makeText(this, "Done!", Toast.LENGTH_LONG).show());
-                      }).start();
-                  });
-              }
-
-              @Override
-              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-                  super.onActivityResult(requestCode, resultCode, data);
-                  if (resultCode == RESULT_OK && data != null) {
-                      if (requestCode == 1) inputUri = data.getData();
-                      if (requestCode == 2) outputUri = data.getData();
-                  }
-              }
-          }
-          EOF
-
-          # Másoljuk a natív .so fájlokat
-          cp ffmpeg/build/armeabi-v7a/lib/*.so FFmpegUI/app/src/main/jniLibs/armeabi-v7a/
-
-      - name: Build APK
-        run: |
-          cd FFmpegUI
-          ./gradlew assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FFmpegUI-armeabi-v7a
-          path: FFmpegUI/app/build/outputs/apk/debug/app-debug.apk
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ github.run_number }}
+        name: "FFmpeg Android Build ${{ github.run_number }}"
+        files: app/build/outputs/apk/release/app-release.apk
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
