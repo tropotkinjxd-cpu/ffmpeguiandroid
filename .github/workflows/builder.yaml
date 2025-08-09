@@ -1,4 +1,4 @@
-name: Android FFmpeg Build with MediaCodec
+name: Android ARMv7 FFmpeg mediacodec build
 
 on:
   workflow_dispatch:
@@ -7,31 +7,33 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          sdk-version: 'latest'
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf automake build-essential pkg-config git unzip
+          sudo apt-get install -y git make automake autoconf libtool pkg-config unzip
 
-      - name: Download NDK
+      - name: Download Android NDK
         run: |
           mkdir -p $HOME/android-ndk
           cd $HOME/android-ndk
           wget https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-          unzip android-ndk-r25c-linux.zip
+          unzip -q android-ndk-r25c-linux.zip
           mv android-ndk-r25c ndk
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk/ndk" >> $GITHUB_ENV
 
-      - name: Build FFmpeg for ARMv7 with MediaCodec
+      - name: Download FFmpeg
+        run: |
+          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          cd ffmpeg
+          git checkout n6.0
+
+      - name: Build FFmpeg ARMv7 with MediaCodec
         run: |
           export API=21
-          export NDK=$HOME/android-ndk/ndk
+          export NDK=$ANDROID_NDK_HOME
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
           export AR=$TOOLCHAIN/bin/llvm-ar
           export AS=$TOOLCHAIN/bin/llvm-as
@@ -41,8 +43,7 @@ jobs:
           export STRIP=$TOOLCHAIN/bin/llvm-strip
           export NM=$TOOLCHAIN/bin/llvm-nm
           export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
-
-          git clone https://github.com/FFmpeg/FFmpeg ffmpeg
+          
           cd ffmpeg
           ./configure \
             --prefix=$PWD/build/armeabi-v7a \
@@ -54,10 +55,7 @@ jobs:
             --enable-jni \
             --enable-mediacodec \
             --enable-decoder=h264_mediacodec \
-            --enable-decoder=hevc_mediacodec \
-            --enable-decoder=mpeg4_mediacodec \
-            --enable-v4l2-m2m \
-            --disable-vulkan \
+            --enable-encoder=h264_mediacodec \
             --disable-static \
             --disable-doc \
             --disable-programs \
@@ -74,15 +72,24 @@ jobs:
           make -j$(nproc)
           make install
 
-      - name: Package APK
+      - name: Package build
         run: |
           mkdir -p output
-          echo "Ez lenne a helye az APK csomagolásnak, itt beilleszthető az Android Studio build lépés."
-          zip -r output/ffmpeg-armv7-mediacodec.zip ffmpeg/build/armeabi-v7a
+          cd ffmpeg/build
+          zip -r ../../output/ffmpeg-armv7-mediacodec.zip .
+          cd ../..
+
+      - name: Create Git Tag
+        run: |
+          TAG="build-$(date +'%Y%m%d-%H%M%S')"
+          echo "TAG_NAME=$TAG" >> $GITHUB_ENV
+          git tag $TAG
+          git push origin $TAG
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ env.TAG_NAME }}
           files: output/ffmpeg-armv7-mediacodec.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
