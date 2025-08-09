@@ -1,4 +1,6 @@
-name: Build FFmpeg ARMv7 + MediaCodec
+          name: ffmpeg-armv7-mediacodec
+          path: output/ffmpeg-armv7-mediacodec.zip
+name: Build FFmpeg ARMv7 with MediaCodec
 
 on:
   workflow_dispatch:
@@ -8,21 +10,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y unzip pkg-config
-
-      - name: Download Android NDK
+      - name: Set up Android NDK
         run: |
-          mkdir -p $HOME/android-ndk
-          cd $HOME/android-ndk
-          curl -LO https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-          unzip android-ndk-r26d-linux.zip
-          mv android-ndk-r26d ndk
-        env:
-          ANDROID_NDK_HOME: $HOME/android-ndk/ndk
+          mkdir -p /home/runner/android-ndk
+          cd /home/runner/android-ndk
+          curl -sSL https://dl.google.com/android/repository/android-ndk-r26c-linux.zip -o ndk.zip
+          unzip -q ndk.zip
+          mv android-ndk-* ndk
+          echo "$PWD/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+        shell: bash
 
       - name: Build FFmpeg
         run: |
@@ -49,7 +48,6 @@ jobs:
             --target-os=android \
             --arch=armv7a \
             --cpu=armv7-a \
-            --enable-cross-compile \
             --enable-shared \
             --enable-gpl \
             --enable-jni \
@@ -58,11 +56,11 @@ jobs:
             --enable-decoder=hevc_mediacodec \
             --enable-decoder=mpeg4_mediacodec \
             --enable-encoder=h264_mediacodec \
-            --disable-libdrm \
-            --disable-vulkan \
             --disable-static \
             --disable-doc \
             --disable-programs \
+            --disable-vulkan \
+            --disable-libdrm \
             --cross-prefix=$TOOLCHAIN/bin/arm-linux-androideabi- \
             --cc=$CC \
             --cxx=$CXX \
@@ -76,15 +74,23 @@ jobs:
 
           make -j2
           make install
+        env:
+          ANDROID_NDK_HOME: /home/runner/android-ndk/ndk
+          ac_cv_header_vulkan_vulkan_h: no
+          ac_cv_lib_vulkan_vulkan: no
 
-      - name: Create output zip
+      - name: Prepare output
         run: |
-          mkdir -p output
+          mkdir -p "${{ github.workspace }}/output"
           cd ffmpeg/build/armeabi-v7a
-          zip -r ../../../../output/ffmpeg-armv7-mediacodec.zip .
+          zip -r "${{ github.workspace }}/output/ffmpeg-armv7-mediacodec.zip" .
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ffmpeg-armv7-mediacodec
-          path: output/ffmpeg-armv7-mediacodec.zip
+          tag_name: auto-build-${{ github.run_number }}
+          name: Automated Build ${{ github.run_number }}
+          body: Automatikusan generált FFmpeg ARMv7 + MediaCodec build.
+          files: ${{ github.workspace }}/output/ffmpeg-armv7-mediacodec.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
