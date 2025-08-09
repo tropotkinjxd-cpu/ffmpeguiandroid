@@ -1,0 +1,61 @@
+name: Build FFmpeg Android GUI
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      # Android SDK + NDK telepítése
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v2
+
+      # ffmpeg forrás letöltés + build MediaCodec támogatással
+      - name: Build FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yasm pkg-config
+          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          cd ffmpeg
+          ./configure \
+            --target-os=android \
+            --arch=armv7-a \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-libmp3lame \
+            --enable-jni \
+            --enable-mediacodec \
+            --enable-decoder=h264_mediacodec \
+            --enable-encoder=h264_mediacodec \
+            --disable-static \
+            --enable-shared
+          make -j$(nproc)
+          cd ..
+          mkdir -p app/src/main/assets
+          cp ffmpeg/ffmpeg app/src/main/assets/
+
+      # Android app build
+      - name: Build APK
+        run: ./gradlew assembleDebug
+
+      # Release létrehozása
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/src/main/assets/ffmpeg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
