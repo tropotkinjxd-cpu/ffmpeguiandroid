@@ -1,4 +1,4 @@
-name: Build FFmpeg MediaCodec APK
+Adyname: Build FFmpeg MediaCodec APK
 
 on:
   push:
@@ -70,6 +70,7 @@ jobs:
             --enable-decoder=h264_mediacodec \
             --enable-decoder=hevc_mediacodec \
             --enable-decoder=mpeg4_mediacodec \
+            --enable-jni \
             --enable-v4l2-m2m \
             --disable-vulkan \
             --disable-static \
