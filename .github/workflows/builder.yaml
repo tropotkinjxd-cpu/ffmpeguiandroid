@@ -1,39 +1,56 @@
-name: Build FFmpeg ARMv7 with MediaCodec
+name: Build FFmpeg ARMv7 (MediaCodec) - fully fixed
 
 on:
+  workflow_dispatch:
   push:
     branches:
-      - '**'   # Lefut minden branch pushra
+      - '**'
 
 permissions:
-  contents: write  # Release létrehozás engedélyezése
+  contents: write   # kell a release létrehozásához
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      BUILD_TAG_PREFIX: build
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Android NDK
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make automake autoconf libtool pkg-config unzip wget build-essential yasm nasm
+
+      - name: Download Android NDK r25c
         run: |
           mkdir -p $HOME/android-ndk
           cd $HOME/android-ndk
-          wget https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-          unzip -q android-ndk-r25c-linux.zip
+          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip -O ndk.zip
+          unzip -q ndk.zip
           mv android-ndk-r25c ndk
-        shell: bash
+          rm ndk.zip
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk/ndk" >> $GITHUB_ENV
+          echo "PATH=$HOME/android-ndk/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Download FFmpeg source
+      - name: Clone fresh FFmpeg (clean)
         run: |
-          git clone https://github.com/FFmpeg/FFmpeg ffmpeg --depth 1
-        shell: bash
+          rm -rf ffmpeg
+          git clone --depth 1 --branch n6.0 https://github.com/FFmpeg/FFmpeg ffmpeg
+          cd ffmpeg
+          git clean -fdx || true
 
-      - name: Build FFmpeg ARMv7 with MediaCodec
+      - name: Configure & build FFmpeg (armeabi-v7a) with MediaCodec (no Vulkan, no libdrm)
+        # we force ac_cv_* vars so configure will not pick up partial Vulkan headers
+        env:
+          ac_cv_header_vulkan_vulkan_h: "no"
+          ac_cv_lib_vulkan_vulkan: "no"
         run: |
+          set -e
           export API=21
-          export NDK=$HOME/android-ndk/ndk
+          export NDK=$ANDROID_NDK_HOME
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
           export AR=$TOOLCHAIN/bin/llvm-ar
           export AS=$TOOLCHAIN/bin/llvm-as
@@ -43,8 +60,14 @@ jobs:
           export STRIP=$TOOLCHAIN/bin/llvm-strip
           export NM=$TOOLCHAIN/bin/llvm-nm
           export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          export SYSROOT=$TOOLCHAIN/sysroot
 
           cd ffmpeg
+
+          # ensure totally clean (important if re-running)
+          make distclean || true
+          git clean -fdx || true
+
           ./configure \
             --prefix=$PWD/build/armeabi-v7a \
             --target-os=android \
@@ -54,7 +77,11 @@ jobs:
             --enable-gpl \
             --enable-jni \
             --enable-mediacodec \
-            --enable-v4l2-m2m \
+            --enable-decoder=h264_mediacodec \
+            --enable-decoder=hevc_mediacodec \
+            --enable-decoder=mpeg4_mediacodec \
+            --enable-encoder=h264_mediacodec || true \
+            --disable-libdrm \
             --disable-vulkan \
             --disable-static \
             --disable-doc \
@@ -66,27 +93,46 @@ jobs:
             --nm=$NM \
             --strip=$STRIP \
             --ranlib=$RANLIB \
-            --sysroot=$TOOLCHAIN/sysroot \
+            --sysroot=$SYSROOT \
             --extra-cflags="-O3 -fPIC" \
             --extra-ldflags="-lm"
 
-          make -j$(nproc)
+          # build with moderate parallelism to avoid OOM on runner
+          make -j2
           make install
-        shell: bash
 
-      - name: Package build
+      - name: Package build artifacts (safe absolute path)
         run: |
-          mkdir -p output
-          cd ffmpeg/build/armeabi-v7a
-          zip -r ../../../../output/ffmpeg-armv7-mediacodec.zip .
-        shell: bash
+          mkdir -p $GITHUB_WORKSPACE/output
+          if [ -d ffmpeg/build/armeabi-v7a ]; then
+            cd ffmpeg/build/armeabi-v7a
+            zip -r $GITHUB_WORKSPACE/output/ffmpeg-armv7-mediacodec.zip . || true
+          else
+            echo "ERROR: build directory missing: ffmpeg/build/armeabi-v7a"
+            ls -la ffmpeg || true
+            exit 1
+          fi
 
-      - name: Create GitHub Release
+      - name: Create tag and push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${BUILD_TAG_PREFIX}-$(date +'%Y%m%d-%H%M%S')"
+          echo "TAG_NAME=${TAG}" >> $GITHUB_ENV
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${TAG}"
+          # push tag using token auth
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release and upload artifact
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: auto-build-${{ github.run_number }}
-          name: Automated Build ${{ github.run_number }}
-          body: Automatikusan generált FFmpeg ARMv7 + MediaCodec build.
-          files: output/ffmpeg-armv7-mediacodec.zip
+          tag_name: ${{ env.TAG_NAME }}
+          name: "Automated Build ${{ github.run_number }}"
+          body: "Automatikusan generált FFmpeg ARMv7 + MediaCodec build."
+          files: $GITHUB_WORKSPACE/output/ffmpeg-armv7-mediacodec.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
