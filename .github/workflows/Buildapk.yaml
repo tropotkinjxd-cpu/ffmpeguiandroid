@@ -1,0 +1,102 @@
+name: Build FFmpeg + Android GUI APK
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Android NDK
+        run: |
+          mkdir -p $HOME/android-ndk
+          cd $HOME/android-ndk
+          wget https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+          unzip -q android-ndk-r25c-linux.zip
+          mv android-ndk-r25c ndk
+
+      - name: Download FFmpeg
+        run: |
+          git clone https://github.com/FFmpeg/FFmpeg ffmpeg --depth 1
+
+      - name: Build FFmpeg for ARMv7 with MediaCodec
+        run: |
+          export API=21
+          export NDK=$HOME/android-ndk/ndk
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export AS=$TOOLCHAIN/bin/llvm-as
+          export CC=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang
+          export CXX=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang++
+          export LD=$TOOLCHAIN/bin/ld
+          export STRIP=$TOOLCHAIN/bin/llvm-strip
+          export NM=$TOOLCHAIN/bin/llvm-nm
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+
+          cd ffmpeg
+          ./configure \
+            --prefix=$PWD/build/armeabi-v7a \
+            --target-os=android \
+            --arch=armv7a \
+            --cpu=armv7-a \
+            --enable-shared \
+            --enable-gpl \
+            --enable-jni \
+            --enable-mediacodec \
+            --enable-v4l2-m2m \
+            --disable-vulkan \
+            --disable-static \
+            --disable-doc \
+            --disable-programs \
+            --cross-prefix=$TOOLCHAIN/bin/arm-linux-androideabi- \
+            --cc=$CC \
+            --cxx=$CXX \
+            --ar=$AR \
+            --nm=$NM \
+            --strip=$STRIP \
+            --ranlib=$RANLIB \
+            --sysroot=$TOOLCHAIN/sysroot \
+            --extra-cflags="-O3 -fPIC" \
+            --extra-ldflags="-lm"
+
+          make -j$(nproc)
+          make install
+
+      - name: Copy FFmpeg binaries to app
+        run: |
+          mkdir -p app/src/main/assets/ffmpeg
+          cp -r ffmpeg/build/armeabi-v7a/* app/src/main/assets/ffmpeg/
+
+      - name: Build APK
+        run: ./gradlew assembleRelease
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-apk-${{ github.run_number }}
+          name: "FFmpeg + GUI APK ${{ github.run_number }}"
+          body: |
+            Automatikusan generált APK.
+            Tartalmazza az FFmpeg ARMv7 MediaCodec támogatással.
+            Első futáskor a binárisok automatikusan települnek.
+          files: app/build/outputs/apk/release/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
