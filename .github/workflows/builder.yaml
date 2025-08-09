@@ -20,52 +20,38 @@ jobs:
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Install NDK
+    - name: Install NDK (r25c - compatible with FFmpeg & ARMv7)
       run: sdkmanager --install "ndk;25.2.9519653"
 
-    - name: Create project structure
+    - name: Create Android project structure
       run: |
         mkdir -p app/src/main/java/com/example/ffmpegui
         mkdir -p app/src/main/res/layout
         mkdir -p app/src/main/res/values
 
-        # settings.gradle
         cat <<'EOF' > settings.gradle
         rootProject.name = "FFmpegUI"
         include ':app'
         EOF
 
-        # gradle.properties
         cat <<'EOF' > gradle.properties
         org.gradle.jvmargs=-Xmx2g
         android.useAndroidX=true
         android.enableJetifier=true
         EOF
 
-        # build.gradle (root)
         cat <<'EOF' > build.gradle
         buildscript {
-            repositories {
-                google()
-                mavenCentral()
-            }
-            dependencies {
-                classpath 'com.android.tools.build:gradle:8.1.0'
-            }
+            repositories { google(); mavenCentral() }
+            dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
         }
         allprojects {
-            repositories {
-                google()
-                mavenCentral()
-            }
+            repositories { google(); mavenCentral() }
         }
         EOF
 
-        # app/build.gradle
         cat <<'EOF' > app/build.gradle
-        plugins {
-            id 'com.android.application'
-        }
+        plugins { id 'com.android.application' }
         android {
             namespace "com.example.ffmpegui"
             compileSdk 33
@@ -75,22 +61,13 @@ jobs:
                 targetSdk 33
                 versionCode 1
                 versionName "1.0"
-                ndk {
-                    abiFilters "armeabi-v7a"
-                }
+                ndk { abiFilters "armeabi-v7a" }
             }
-            buildTypes {
-                release {
-                    minifyEnabled false
-                }
-            }
+            buildTypes { release { minifyEnabled false } }
         }
-        dependencies {
-            implementation fileTree(dir: "libs", include: ["*.jar", "*.aar"])
-        }
+        dependencies { implementation fileTree(dir: "libs", include: ["*.jar", "*.aar"]) }
         EOF
 
-        # MainActivity.java
         cat <<'EOF' > app/src/main/java/com/example/ffmpegui/MainActivity.java
         package com.example.ffmpegui;
         import android.app.Activity;
@@ -105,12 +82,13 @@ jobs:
         }
         EOF
 
-        # layout XML
         cat <<'EOF' > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-            android:orientation="vertical" android:layout_width="match_parent"
-            android:layout_height="match_parent" android:padding="16dp">
+            android:orientation="vertical"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="16dp">
             <Spinner android:id="@+id/videoCodecSpinner"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"/>
@@ -128,7 +106,6 @@ jobs:
         </LinearLayout>
         EOF
 
-        # strings.xml
         cat <<'EOF' > app/src/main/res/values/strings.xml
         <resources>
             <string name="app_name">FFmpegUI</string>
@@ -142,25 +119,34 @@ jobs:
 
         git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
         cd ffmpeg
+        git checkout n6.0
+
+        export NDK=$ANDROID_SDK_ROOT/ndk/25.2.9519653
+        export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+        export API=21
+
         ./configure \
           --prefix=$PWD/build \
           --enable-cross-compile \
           --target-os=android \
           --arch=arm \
           --cpu=armv7-a \
-          --cross-prefix=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21- \
+          --cross-prefix=$TOOLCHAIN/bin/arm-linux-androideabi- \
+          --cc=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang \
+          --cxx=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang++ \
           --enable-gpl \
           --enable-nonfree \
           --enable-encoder=h264_v4l2m2m,mpeg4_v4l2m2m,vp8_v4l2m2m,h264_omx \
           --enable-decoder=h264,mpeg4,vp8 \
           --enable-shared \
           --disable-static
+
         make -j$(nproc)
         make install
         cd ..
 
-        mkdir -p app/libs
-        cp ffmpeg/build/lib/*.so app/libs/
+        mkdir -p app/libs/armeabi-v7a
+        cp ffmpeg/build/lib/*.so app/libs/armeabi-v7a/
 
     - name: Build APK
       run: ./gradlew assembleRelease
