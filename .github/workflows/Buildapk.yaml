@@ -1,4 +1,4 @@
-name: Build FFmpeg + Android GUI APK
+name: Build FFmpeg + Android GUI APK with Binary
 
 on:
   push:
@@ -55,7 +55,7 @@ jobs:
           ./configure \
             --prefix=$PWD/build/armeabi-v7a \
             --target-os=android \
-            --arch=armv7a \
+            --arch=arm \
             --cpu=armv7-a \
             --enable-shared \
             --enable-gpl \
@@ -77,26 +77,175 @@ jobs:
             --extra-cflags="-O3 -fPIC" \
             --extra-ldflags="-lm"
 
-          make -j$(nproc)
-          make install
+          make -j$(nproc) ffmpeg
+          mkdir -p ../app/src/main/assets
+          cp ffmpeg ../app/src/main/assets/ffmpeg
 
-      - name: Copy FFmpeg binaries to app
+      - name: Create Android project structure with GUI
         run: |
-          mkdir -p app/src/main/assets/ffmpeg
-          cp -r ffmpeg/build/armeabi-v7a/* app/src/main/assets/ffmpeg/
+          mkdir -p app/src/main/java/com/example/ffmpegapp
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/assets
+
+          cat > settings.gradle <<'EOF'
+          include ':app'
+          rootProject.name = "FFmpegGUI"
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace "com.example.ffmpegapp"
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.example.ffmpegapp"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+          }
+
+          dependencies {
+              implementation "androidx.core:core-ktx:1.13.1"
+              implementation "androidx.appcompat:appcompat:1.7.0"
+              implementation "com.google.android.material:material:1.12.0"
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.ffmpegapp">
+
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+
+              <application
+                  android:allowBackup="true"
+                  android:label="FFmpeg GUI"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                  <activity android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/layout/activity_main.xml <<'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:orientation="vertical" 
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:padding="16dp">
+
+              <Button
+                  android:id="@+id/runButton"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="FFmpeg verzió lekérdezése" />
+
+              <ScrollView
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent">
+                  <TextView
+                      android:id="@+id/outputText"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:textSize="12sp"
+                      android:scrollbars="vertical"/>
+              </ScrollView>
+          </LinearLayout>
+          EOF
+
+          cat > app/src/main/java/com/example/ffmpegapp/MainActivity.kt <<'EOF'
+          package com.example.ffmpegapp
+
+          import android.os.Bundle
+          import android.widget.Button
+          import android.widget.TextView
+          import androidx.appcompat.app.AppCompatActivity
+          import java.io.*
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var outputText: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+
+                  outputText = findViewById(R.id.outputText)
+                  val runButton: Button = findViewById(R.id.runButton)
+
+                  runButton.setOnClickListener {
+                      copyAndRunFFmpeg()
+                  }
+              }
+
+              private fun copyAndRunFFmpeg() {
+                  Thread {
+                      try {
+                          val ffmpegFile = File(filesDir, "ffmpeg")
+                          if (!ffmpegFile.exists()) {
+                              assets.open("ffmpeg").use { input ->
+                                  FileOutputStream(ffmpegFile).use { output ->
+                                      input.copyTo(output)
+                                  }
+                              }
+                              ffmpegFile.setExecutable(true)
+                          }
+
+                          val process = Runtime.getRuntime().exec(arrayOf(ffmpegFile.absolutePath, "-version"))
+                          val reader = BufferedReader(InputStreamReader(process.inputStream))
+                          val output = reader.readText()
+
+                          runOnUiThread {
+                              outputText.text = output
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              outputText.text = "Hiba: ${e.message}"
+                          }
+                      }
+                  }.start()
+              }
+          }
+          EOF
 
       - name: Build APK
         run: ./gradlew assembleRelease
 
-      - name: Upload Release
+      - name: Upload Release APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: auto-apk-${{ github.run_number }}
           name: "FFmpeg + GUI APK ${{ github.run_number }}"
           body: |
-            Automatikusan generált APK.
-            Tartalmazza az FFmpeg ARMv7 MediaCodec támogatással.
-            Első futáskor a binárisok automatikusan települnek.
+            Automatikusan generált APK FFmpeg ARMv7 + MediaCodec támogatással és futtatható binárissal.
           files: app/build/outputs/apk/release/app-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
