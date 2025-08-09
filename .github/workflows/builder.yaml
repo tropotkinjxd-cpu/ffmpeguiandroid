@@ -3,35 +3,34 @@ name: Build FFmpeg ARMv7 with MediaCodec
 on:
   push:
     branches:
-      - '**'   # Minden branchre lefut
+      - '**'   # Lefut minden branch pushra
+
+permissions:
+  contents: write  # Release létrehozás engedélyezése
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git make automake autoconf libtool pkg-config unzip
-
-      - name: Download Android NDK
+      - name: Set up Android NDK
         run: |
           mkdir -p $HOME/android-ndk
           cd $HOME/android-ndk
           wget https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
           unzip -q android-ndk-r25c-linux.zip
           mv android-ndk-r25c ndk
+        shell: bash
 
-      - name: Clone FFmpeg
+      - name: Download FFmpeg source
         run: |
-          git clone https://github.com/FFmpeg/FFmpeg ffmpeg
-          cd ffmpeg
-          git checkout n6.1.1
+          git clone https://github.com/FFmpeg/FFmpeg ffmpeg --depth 1
+        shell: bash
 
-      - name: Configure and build FFmpeg
+      - name: Build FFmpeg ARMv7 with MediaCodec
         run: |
           export API=21
           export NDK=$HOME/android-ndk/ndk
@@ -53,9 +52,10 @@ jobs:
             --cpu=armv7-a \
             --enable-shared \
             --enable-gpl \
-            --enable-mediacodec \
             --enable-jni \
+            --enable-mediacodec \
             --enable-v4l2-m2m \
+            --disable-vulkan \
             --disable-static \
             --disable-doc \
             --disable-programs \
@@ -69,20 +69,24 @@ jobs:
             --sysroot=$TOOLCHAIN/sysroot \
             --extra-cflags="-O3 -fPIC" \
             --extra-ldflags="-lm"
+
           make -j$(nproc)
           make install
+        shell: bash
 
-      - name: Package build artifacts
+      - name: Package build
         run: |
           mkdir -p output
-          zip -r output/ffmpeg-armv7-mediacodec.zip ffmpeg/build/armeabi-v7a
+          cd ffmpeg/build/armeabi-v7a
+          zip -r ../../../../output/ffmpeg-armv7-mediacodec.zip .
+        shell: bash
 
-      - name: Create GitHub Release (auto-tag)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: auto-build-${{ github.run_number }}
-          name: "Automated Build ${{ github.run_number }}"
-          body: "Automatikusan generált FFmpeg ARMv7 + MediaCodec build."
+          name: Automated Build ${{ github.run_number }}
+          body: Automatikusan generált FFmpeg ARMv7 + MediaCodec build.
           files: output/ffmpeg-armv7-mediacodec.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
