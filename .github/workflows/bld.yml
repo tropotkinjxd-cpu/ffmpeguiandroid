@@ -1,0 +1,119 @@
+name: Android ARMv7 FFmpeg (MediaCodec) build - disable Vulkan
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # NDK helyzetet később állítjuk (beállítja a Download step)
+      BUILD_TAG_PREFIX: build
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make automake autoconf libtool pkg-config unzip wget build-essential yasm
+      - name: Download Android NDK r25c
+        run: |
+          mkdir -p $HOME/android-ndk
+          cd $HOME/android-ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip -O ndk.zip
+          unzip -q ndk.zip
+          mv android-ndk-r25c ndk
+          rm ndk.zip
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk/ndk" >> $GITHUB_ENV
+          echo "PATH=$HOME/android-ndk/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
+      - name: Clone fresh FFmpeg
+        run: |
+          rm -rf ffmpeg
+          git clone --depth 1 --branch n6.0 https://github.com/FFmpeg/FFmpeg ffmpeg
+          cd ffmpeg
+          # ensure absolutely clean (in case of retries)
+          git clean -fdx || true
+      - name: Configure & build FFmpeg (armeabi-v7a) with MediaCodec, FORCE no Vulkan
+        env:
+          # Kényszerítjük, hogy a configure NE találja a Vulkan header-t / lib-et
+          ac_cv_header_vulkan_vulkan_h: "no"
+          ac_cv_lib_vulkan_vulkan: "no"
+        run: |
+          set -e
+          export API=21
+          export NDK=$ANDROID_NDK_HOME
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export AS=$TOOLCHAIN/bin/llvm-as
+          export CC=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang
+          export CXX=$TOOLCHAIN/bin/armv7a-linux-androideabi${API}-clang++
+          export LD=$TOOLCHAIN/bin/ld
+          export STRIP=$TOOLCHAIN/bin/llvm-strip
+          export NM=$TOOLCHAIN/bin/llvm-nm
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          export SYSROOT=$TOOLCHAIN/sysroot
+          cd ffmpeg
+          # extra sanity: make sure previous build artefactok nincsenek
+          make distclean || true
+          git clean -fdx || true
+          ./configure \
+            --prefix=$PWD/build/armeabi-v7a \
+            --target-os=android \
+            --arch=armv7a \
+            --cpu=armv7-a \
+            --enable-shared \
+            --enable-gpl \
+            --enable-jni \
+            --enable-mediacodec \
+            --enable-decoder=h264_mediacodec \
+            --enable-decoder=hevc_mediacodec \
+            --enable-decoder=mpeg4_mediacodec \
+            --disable-libdrm \
+            --disable-vulkan \
+            --disable-static \
+            --disable-doc \
+            --disable-programs \
+            --cross-prefix=$TOOLCHAIN/bin/arm-linux-androideabi- \
+            --cc=$CC \
+            --cxx=$CXX \
+            --ar=$AR \
+            --nm=$NM \
+            --strip=$STRIP \
+            --ranlib=$RANLIB \
+            --sysroot=$SYSROOT \
+            --extra-cflags="-O3 -fPIC" \
+            --extra-ldflags="-lm"
+          # build (kevesebb párhuzamos process a mem-kíméléshez)
+          make -j2
+          make install
+      - name: Package build artifacts
+        run: |
+        mkdir -p "${{ github.workspace }}/output"
+        cd ffmpeg/build/armeabi-v7a
+        zip -r "${{ github.workspace }}/output/ffmpeg-armv7-mediacodec.zip" .
+     
+      - name: Create a tag for this build and push it
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${BUILD_TAG_PREFIX}-$(date +'%Y%m%d-%H%M%S')"
+          echo "TAG_NAME=${TAG}" >> $GITHUB_ENV
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # push tag using token to ensure permissions
+          git tag "${TAG}"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push origin "${TAG}"
+      - name: Create GitHub Release and upload artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          files: output/ffmpeg-armv7-mediacodec.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
