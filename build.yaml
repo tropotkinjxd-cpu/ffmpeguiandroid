@@ -1,0 +1,287 @@
+name: Android FFmpeg HW Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v2
+
+      - name: Create project structure
+        run: |
+          mkdir -p app/src/main/java/com/example/ffmpegui
+          mkdir -p app/src/main/res/layout
+          mkdir -p gradle/wrapper
+          mkdir -p .github/workflows
+
+          # settings.gradle
+          cat <<'EOF' > settings.gradle
+          rootProject.name = "FFmpegUI"
+          include ':app'
+          EOF
+
+          # gradle.properties
+          cat <<'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+
+          # build.gradle (root)
+          cat <<'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.0.2'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          # gradle wrapper properties
+          cat <<'EOF' > gradle/wrapper/gradle-wrapper.properties
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.0.2-bin.zip
+          EOF
+
+          # gradlew script
+          cat <<'EOF' > gradlew
+          #!/usr/bin/env sh
+          ./gradlew "\$@"
+          EOF
+          chmod +x gradlew
+
+          # app/build.gradle
+          cat <<'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.example.ffmpegui'
+              compileSdk 33
+
+              defaultConfig {
+                  applicationId "com.example.ffmpegui"
+                  minSdk 21
+                  targetSdk 33
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+              }
+          }
+
+          dependencies {
+              implementation fileTree(dir: "libs", include: ["*.jar", "*.so"])
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.9.0'
+          }
+          EOF
+
+          # AndroidManifest.xml
+          cat <<'EOF' > app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.ffmpegui">
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="FFmpegUI"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+                  <activity android:name=".MainActivity">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # MainActivity.java
+          cat <<'EOF' > app/src/main/java/com/example/ffmpegui/MainActivity.java
+          package com.example.ffmpegui;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.widget.ArrayAdapter;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.Spinner;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+
+              private static final int REQUEST_INPUT = 1;
+              private static final int REQUEST_OUTPUT = 2;
+
+              private Uri inputUri;
+              private Uri outputUri;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  setContentView(R.layout.activity_main);
+
+                  Spinner videoCodec = findViewById(R.id.videoCodec);
+                  Spinner audioCodec = findViewById(R.id.audioCodec);
+
+                  String[] videoOptions = {"libx264 (CPU)", "h264_v4l2m2m (HW)", "mpeg4_v4l2m2m (HW)", "vp8_v4l2m2m (HW)", "h264_omx (HW)"};
+                  String[] audioOptions = {"aac", "libmp3lame", "opus"};
+
+                  videoCodec.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, videoOptions));
+                  audioCodec.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, audioOptions));
+
+                  Button selectInput = findViewById(R.id.selectInput);
+                  Button selectOutput = findViewById(R.id.selectOutput);
+                  Button encode = findViewById(R.id.encode);
+
+                  selectInput.setOnClickListener(v -> {
+                      Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                      intent.setType("*/*");
+                      startActivityForResult(intent, REQUEST_INPUT);
+                  });
+
+                  selectOutput.setOnClickListener(v -> {
+                      Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                      intent.setType("video/*");
+                      intent.putExtra(Intent.EXTRA_TITLE, "output.mp4");
+                      startActivityForResult(intent, REQUEST_OUTPUT);
+                  });
+
+                  encode.setOnClickListener(v -> {
+                      if (inputUri == null || outputUri == null) {
+                          Toast.makeText(this, "Select input and output files", Toast.LENGTH_SHORT).show();
+                          return;
+                      }
+                      String vid = videoCodec.getSelectedItem().toString().split(" ")[0];
+                      String aud = audioCodec.getSelectedItem().toString();
+                      EditText params = findViewById(R.id.params);
+                      String extra = params.getText().toString();
+                      Toast.makeText(this, "Encoding: " + vid + " + " + aud, Toast.LENGTH_LONG).show();
+                  });
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (resultCode == RESULT_OK && data != null) {
+                      if (requestCode == REQUEST_INPUT) {
+                          inputUri = data.getData();
+                      } else if (requestCode == REQUEST_OUTPUT) {
+                          outputUri = data.getData();
+                      }
+                  }
+              }
+          }
+          EOF
+
+          # activity_main.xml
+          cat <<'EOF' > app/src/main/res/layout/activity_main.xml
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:padding="16dp">
+
+              <Spinner
+                  android:id="@+id/videoCodec"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content" />
+
+              <Spinner
+                  android:id="@+id/audioCodec"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content" />
+
+              <EditText
+                  android:id="@+id/params"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:hint="Extra FFmpeg parameters" />
+
+              <Button
+                  android:id="@+id/selectInput"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Select Input" />
+
+              <Button
+                  android:id="@+id/selectOutput"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Select Output" />
+
+              <Button
+                  android:id="@+id/encode"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Encode" />
+          </LinearLayout>
+          EOF
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake build-essential pkg-config git wget unzip nasm yasm libtool
+
+      - name: Download and build FFmpeg with HW accel
+        run: |
+          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          cd ffmpeg
+          ./configure \
+            --prefix=$PWD/build \
+            --enable-shared \
+            --disable-static \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-omx \
+            --enable-omx-rpi \
+            --enable-v4l2_m2m \
+            --disable-debug
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Build APK
+        run: ./gradlew assembleRelease
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: FFmpegUI.apk
+          path: app/build/outputs/apk/release/app-release.apk
