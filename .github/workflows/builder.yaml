@@ -1,9 +1,8 @@
-name: Build FFmpeg Android APK
+name: Build FFmpeg GUI Android (ARMv7)
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -16,24 +15,21 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo apt update
-        sudo apt install -y git wget unzip build-essential pkg-config yasm cmake autoconf automake libtool
+        sudo apt-get update
+        sudo apt-get install -y pkg-config autoconf automake build-essential libtool git unzip
 
-    - name: Set up Android SDK
+    - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-      with:
-        api-level: 21
-        ndk: 25.2.9519653
-        cmake: 3.22.1
-        build-tools: 30.0.3
 
-    - name: Download FFmpeg source
+    - name: Download and unpack NDK
       run: |
-        wget https://ffmpeg.org/releases/ffmpeg-6.0.tar.bz2
-        tar xjf ffmpeg-6.0.tar.bz2
-        mv ffmpeg-6.0 ffmpeg
+        sdkmanager --install "ndk;25.2.9519653"
 
-    - name: Configure NDK toolchain
+    - name: Clone FFmpeg
+      run: |
+        git clone --depth=1 --branch n6.0 https://git.ffmpeg.org/ffmpeg.git ffmpeg
+
+    - name: Build FFmpeg for ARMv7
       run: |
         export API=21
         export NDK=$ANDROID_NDK_HOME
@@ -55,7 +51,7 @@ jobs:
           --cpu=armv7-a \
           --enable-shared \
           --enable-gpl \
-          --enable-libdrm \
+          --disable-libdrm \
           --enable-omx \
           --enable-omx-rpi \
           --enable-v4l2-m2m \
@@ -73,28 +69,21 @@ jobs:
           --sysroot=$TOOLCHAIN/sysroot \
           --extra-cflags="-O3 -fPIC" \
           --extra-ldflags="-lm"
-
-    - name: Build FFmpeg
-      run: |
-        cd ffmpeg
         make -j2
         make install
 
-    - name: Prepare Android project
+    - name: Build Android APK
       run: |
         mkdir -p app/src/main/jniLibs/armeabi-v7a
-        cp -v ffmpeg/build/armeabi-v7a/lib/*.so app/src/main/jniLibs/armeabi-v7a/
+        cp ffmpeg/build/armeabi-v7a/lib/*.so app/src/main/jniLibs/armeabi-v7a/
 
-    - name: Build APK
-      run: |
-        chmod +x ./gradlew
         ./gradlew assembleRelease
 
-    - name: Upload to Release
-      uses: softprops/action-gh-release@v1
+    - name: Upload to GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ github.run_number }}
-        name: "FFmpeg Android Build ${{ github.run_number }}"
-        files: app/build/outputs/apk/release/app-release.apk
+        name: "FFmpeg GUI Android Build ${{ github.run_number }}"
+        files: app/build/outputs/apk/release/*.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
