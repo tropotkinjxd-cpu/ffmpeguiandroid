@@ -93,9 +93,9 @@ jobs:
           make install
       - name: Package build artifacts
         run: |
-        mkdir -p "${{ github.workspace }}/output"
-        cd ffmpeg/build/armeabi-v7a
-        zip -r "${{ github.workspace }}/output/ffmpeg-armv7-mediacodec.zip" .
+          mkdir -p "${{ github.workspace }}/output"
+          cd ffmpeg/build/armeabi-v7a
+          zip -r "${{ github.workspace }}/output/ffmpeg-armv7-mediacodec.zip" .
      
       - name: Create a tag for this build and push it
         env:
